@@ -25,10 +25,13 @@ if six.PY3:
     import sys
     from unittest import mock  # noqa: our import detection is naive?
 
+    sys.modules['ldap'] = mock.Mock()
+    sys.modules['ldap.controls'] = mock.Mock()
+    sys.modules['ldap.dn'] = mock.Mock()
+    sys.modules['ldap.filter'] = mock.Mock()
+    sys.modules['ldap.modlist'] = mock.Mock()
     sys.modules['ldappool'] = mock.Mock()
-    sys.modules['memcache'] = mock.Mock()
-    sys.modules['oslo_messaging'] = mock.Mock()
-    sys.modules['paste'] = mock.Mock()
+
 
 # NOTE(dstanek): oslo_i18n.enable_lazy() must be called before
 # keystone.i18n._() is called to ensure it has the desired lazy lookup

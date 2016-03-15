@@ -14,8 +14,10 @@
 
 import uuid
 
+from six.moves import http_client
+
 from keystone import catalog
-from keystone.tests import unit as tests
+from keystone.tests import unit
 from keystone.tests.unit.ksfixtures import database
 from keystone.tests.unit import rest
 
@@ -29,12 +31,9 @@ class V2CatalogTestCase(rest.RestfulTestCase):
         super(V2CatalogTestCase, self).setUp()
         self.useFixture(database.Database())
 
-        self.service_id = uuid.uuid4().hex
-        self.service = self.new_service_ref()
-        self.service['id'] = self.service_id
-        self.catalog_api.create_service(
-            self.service_id,
-            self.service.copy())
+        self.service = unit.new_service_ref()
+        self.service_id = self.service['id']
+        self.catalog_api.create_service(self.service_id, self.service)
 
         # TODO(termie): add an admin user to the fixtures and use that user
         # override the fixtures, for now
@@ -47,30 +46,18 @@ class V2CatalogTestCase(rest.RestfulTestCase):
         super(V2CatalogTestCase, self).config_overrides()
         self.config_fixture.config(group='catalog', driver='sql')
 
-    def new_ref(self):
-        """Populates a ref with attributes common to all API entities."""
-        return {
-            'id': uuid.uuid4().hex,
-            'name': uuid.uuid4().hex,
-            'description': uuid.uuid4().hex,
-            'enabled': True}
-
-    def new_service_ref(self):
-        ref = self.new_ref()
-        ref['type'] = uuid.uuid4().hex
-        return ref
-
     def _get_token_id(self, r):
         """Applicable only to JSON."""
         return r.result['access']['token']['id']
 
-    def _endpoint_create(self, expected_status=200, service_id=SERVICE_FIXTURE,
+    def _endpoint_create(self, expected_status=http_client.OK,
+                         service_id=SERVICE_FIXTURE,
                          publicurl='http://localhost:8080',
                          internalurl='http://localhost:8080',
                          adminurl='http://localhost:8080'):
         if service_id is SERVICE_FIXTURE:
             service_id = self.service_id
-        # FIXME(dolph): expected status should actually be 201 Created
+
         path = '/v2.0/endpoints'
         body = {
             'endpoint': {
@@ -87,12 +74,90 @@ class V2CatalogTestCase(rest.RestfulTestCase):
                                body=body)
         return body, r
 
+    def _region_create(self):
+        region = unit.new_region_ref()
+        region_id = region['id']
+        self.catalog_api.create_region(region)
+        return region_id
+
     def test_endpoint_create(self):
         req_body, response = self._endpoint_create()
         self.assertIn('endpoint', response.result)
         self.assertIn('id', response.result['endpoint'])
         for field, value in req_body['endpoint'].items():
-            self.assertEqual(response.result['endpoint'][field], value)
+            self.assertEqual(value, response.result['endpoint'][field])
+
+    def test_pure_v3_endpoint_with_publicurl_visible_from_v2(self):
+        """Test pure v3 endpoint can be fetched via v2.0 API.
+
+        For those who are using v2.0 APIs, endpoints created by v3 API should
+        also be visible as there are no differences about the endpoints
+        except the format or the internal implementation. Since publicURL is
+        required for v2.0 API, so only v3 endpoints of the service which have
+        the public interface endpoint will be converted into v2.0 endpoints.
+        """
+        region_id = self._region_create()
+
+        # create v3 endpoints with three interfaces
+        body = {
+            'endpoint': unit.new_endpoint_ref(self.service_id,
+                                              region_id=region_id)
+        }
+        for interface in catalog.controllers.INTERFACES:
+            body['endpoint']['interface'] = interface
+            self.admin_request(method='POST',
+                               token=self.get_scoped_token(),
+                               path='/v3/endpoints',
+                               expected_status=http_client.CREATED,
+                               body=body)
+
+        r = self.admin_request(token=self.get_scoped_token(),
+                               path='/v2.0/endpoints')
+        # Endpoints of the service which have a public interface endpoint
+        # will be returned via v2.0 API
+        self.assertEqual(1, len(r.result['endpoints']))
+        v2_endpoint = r.result['endpoints'][0]
+        self.assertEqual(self.service_id, v2_endpoint['service_id'])
+        # This is not the focus of this test, so no different urls are used.
+        self.assertEqual(body['endpoint']['url'], v2_endpoint['publicurl'])
+        self.assertEqual(body['endpoint']['url'], v2_endpoint['adminurl'])
+        self.assertEqual(body['endpoint']['url'], v2_endpoint['internalurl'])
+        self.assertNotIn('name', v2_endpoint)
+
+        v3_endpoint = self.catalog_api.get_endpoint(v2_endpoint['id'])
+        # Checks the v3 public endpoint's id is the generated v2.0 endpoint
+        self.assertEqual('public', v3_endpoint['interface'])
+        self.assertEqual(self.service_id, v3_endpoint['service_id'])
+
+    def test_pure_v3_endpoint_without_publicurl_invisible_from_v2(self):
+        """Test that the v2.0 API can't fetch v3 endpoints without publicURLs.
+
+        v2.0 API will return endpoints created by v3 API, but publicURL is
+        required for the service in the v2.0 API, therefore v3 endpoints of
+        a service which don't have publicURL will be ignored.
+        """
+        region_id = self._region_create()
+
+        # create a v3 endpoint without public interface
+        body = {
+            'endpoint': unit.new_endpoint_ref(self.service_id,
+                                              region_id=region_id)
+        }
+        for interface in catalog.controllers.INTERFACES:
+            if interface == 'public':
+                continue
+            body['endpoint']['interface'] = interface
+            self.admin_request(method='POST',
+                               token=self.get_scoped_token(),
+                               path='/v3/endpoints',
+                               expected_status=http_client.CREATED,
+                               body=body)
+
+        r = self.admin_request(token=self.get_scoped_token(),
+                               path='/v2.0/endpoints')
+        # v3 endpoints of a service which don't have publicURL can't be
+        # fetched via v2.0 API
+        self.assertEqual(0, len(r.result['endpoints']))
 
     def test_endpoint_create_with_null_adminurl(self):
         req_body, response = self._endpoint_create(adminurl=None)
@@ -115,16 +180,20 @@ class V2CatalogTestCase(rest.RestfulTestCase):
         self.assertNotIn("internalurl", response.result['endpoint'])
 
     def test_endpoint_create_with_null_publicurl(self):
-        self._endpoint_create(expected_status=400, publicurl=None)
+        self._endpoint_create(expected_status=http_client.BAD_REQUEST,
+                              publicurl=None)
 
     def test_endpoint_create_with_empty_publicurl(self):
-        self._endpoint_create(expected_status=400, publicurl='')
+        self._endpoint_create(expected_status=http_client.BAD_REQUEST,
+                              publicurl='')
 
     def test_endpoint_create_with_null_service_id(self):
-        self._endpoint_create(expected_status=400, service_id=None)
+        self._endpoint_create(expected_status=http_client.BAD_REQUEST,
+                              service_id=None)
 
     def test_endpoint_create_with_empty_service_id(self):
-        self._endpoint_create(expected_status=400, service_id='')
+        self._endpoint_create(expected_status=http_client.BAD_REQUEST,
+                              service_id='')
 
     def test_endpoint_create_with_valid_url(self):
         """Create endpoint with valid URL should be tested, too."""
@@ -132,7 +201,7 @@ class V2CatalogTestCase(rest.RestfulTestCase):
         valid_url = 'http://127.0.0.1:8774/v1.1/$(tenant_id)s'
 
         # baseline tests that all valid URLs works
-        self._endpoint_create(expected_status=200,
+        self._endpoint_create(expected_status=http_client.OK,
                               publicurl=valid_url,
                               internalurl=valid_url,
                               adminurl=valid_url)
@@ -159,7 +228,7 @@ class V2CatalogTestCase(rest.RestfulTestCase):
         # Case one: publicurl, internalurl and adminurl are
         # all invalid
         for invalid_url in invalid_urls:
-            self._endpoint_create(expected_status=400,
+            self._endpoint_create(expected_status=http_client.BAD_REQUEST,
                                   publicurl=invalid_url,
                                   internalurl=invalid_url,
                                   adminurl=invalid_url)
@@ -167,7 +236,7 @@ class V2CatalogTestCase(rest.RestfulTestCase):
         # Case two: publicurl, internalurl are invalid
         # and adminurl is valid
         for invalid_url in invalid_urls:
-            self._endpoint_create(expected_status=400,
+            self._endpoint_create(expected_status=http_client.BAD_REQUEST,
                                   publicurl=invalid_url,
                                   internalurl=invalid_url,
                                   adminurl=valid_url)
@@ -175,7 +244,7 @@ class V2CatalogTestCase(rest.RestfulTestCase):
         # Case three: publicurl, adminurl are invalid
         # and internalurl is valid
         for invalid_url in invalid_urls:
-            self._endpoint_create(expected_status=400,
+            self._endpoint_create(expected_status=http_client.BAD_REQUEST,
                                   publicurl=invalid_url,
                                   internalurl=valid_url,
                                   adminurl=invalid_url)
@@ -183,7 +252,7 @@ class V2CatalogTestCase(rest.RestfulTestCase):
         # Case four: internalurl, adminurl are invalid
         # and publicurl is valid
         for invalid_url in invalid_urls:
-            self._endpoint_create(expected_status=400,
+            self._endpoint_create(expected_status=http_client.BAD_REQUEST,
                                   publicurl=valid_url,
                                   internalurl=invalid_url,
                                   adminurl=invalid_url)
@@ -191,7 +260,7 @@ class V2CatalogTestCase(rest.RestfulTestCase):
         # Case five: publicurl is invalid, internalurl
         # and adminurl are valid
         for invalid_url in invalid_urls:
-            self._endpoint_create(expected_status=400,
+            self._endpoint_create(expected_status=http_client.BAD_REQUEST,
                                   publicurl=invalid_url,
                                   internalurl=valid_url,
                                   adminurl=valid_url)
@@ -199,7 +268,7 @@ class V2CatalogTestCase(rest.RestfulTestCase):
         # Case six: internalurl is invalid, publicurl
         # and adminurl are valid
         for invalid_url in invalid_urls:
-            self._endpoint_create(expected_status=400,
+            self._endpoint_create(expected_status=http_client.BAD_REQUEST,
                                   publicurl=valid_url,
                                   internalurl=invalid_url,
                                   adminurl=valid_url)
@@ -207,40 +276,35 @@ class V2CatalogTestCase(rest.RestfulTestCase):
         # Case seven: adminurl is invalid, publicurl
         # and internalurl are valid
         for invalid_url in invalid_urls:
-            self._endpoint_create(expected_status=400,
+            self._endpoint_create(expected_status=http_client.BAD_REQUEST,
                                   publicurl=valid_url,
                                   internalurl=valid_url,
                                   adminurl=invalid_url)
 
 
-class TestV2CatalogAPISQL(tests.TestCase):
+class TestV2CatalogAPISQL(unit.TestCase):
 
     def setUp(self):
         super(TestV2CatalogAPISQL, self).setUp()
         self.useFixture(database.Database())
         self.catalog_api = catalog.Manager()
 
-        self.service_id = uuid.uuid4().hex
-        service = {'id': self.service_id, 'name': uuid.uuid4().hex}
+        service = unit.new_service_ref()
+        self.service_id = service['id']
         self.catalog_api.create_service(self.service_id, service)
 
-        endpoint = self.new_endpoint_ref(service_id=self.service_id)
+        self.create_endpoint(service_id=self.service_id)
+
+    def create_endpoint(self, service_id, **kwargs):
+        endpoint = unit.new_endpoint_ref(service_id=service_id,
+                                         region_id=None,
+                                         **kwargs)
         self.catalog_api.create_endpoint(endpoint['id'], endpoint)
+        return endpoint
 
     def config_overrides(self):
         super(TestV2CatalogAPISQL, self).config_overrides()
         self.config_fixture.config(group='catalog', driver='sql')
-
-    def new_endpoint_ref(self, service_id):
-        return {
-            'id': uuid.uuid4().hex,
-            'name': uuid.uuid4().hex,
-            'description': uuid.uuid4().hex,
-            'interface': uuid.uuid4().hex[:8],
-            'service_id': service_id,
-            'url': uuid.uuid4().hex,
-            'region': uuid.uuid4().hex,
-        }
 
     def test_get_catalog_ignores_endpoints_with_invalid_urls(self):
         user_id = uuid.uuid4().hex
@@ -253,14 +317,12 @@ class TestV2CatalogAPISQL(tests.TestCase):
         self.assertEqual(1, len(self.catalog_api.list_endpoints()))
 
         # create a new, invalid endpoint - malformed type declaration
-        endpoint = self.new_endpoint_ref(self.service_id)
-        endpoint['url'] = 'http://keystone/%(tenant_id)'
-        self.catalog_api.create_endpoint(endpoint['id'], endpoint)
+        self.create_endpoint(self.service_id,
+                             url='http://keystone/%(tenant_id)')
 
         # create a new, invalid endpoint - nonexistent key
-        endpoint = self.new_endpoint_ref(self.service_id)
-        endpoint['url'] = 'http://keystone/%(you_wont_find_me)s'
-        self.catalog_api.create_endpoint(endpoint['id'], endpoint)
+        self.create_endpoint(self.service_id,
+                             url='http://keystone/%(you_wont_find_me)s')
 
         # verify that the invalid endpoints don't appear in the catalog
         catalog = self.catalog_api.get_catalog(user_id, tenant_id)
@@ -272,28 +334,22 @@ class TestV2CatalogAPISQL(tests.TestCase):
         user_id = uuid.uuid4().hex
         tenant_id = uuid.uuid4().hex
 
-        # create a service, with a name
-        named_svc = {
-            'id': uuid.uuid4().hex,
-            'type': uuid.uuid4().hex,
-            'name': uuid.uuid4().hex,
-        }
+        # new_service_ref() returns a ref with a `name`.
+        named_svc = unit.new_service_ref()
         self.catalog_api.create_service(named_svc['id'], named_svc)
-        endpoint = self.new_endpoint_ref(service_id=named_svc['id'])
-        self.catalog_api.create_endpoint(endpoint['id'], endpoint)
+        self.create_endpoint(service_id=named_svc['id'])
 
-        # create a service, with no name
-        unnamed_svc = {
-            'id': uuid.uuid4().hex,
-            'type': uuid.uuid4().hex
-        }
+        # This time manually delete the generated `name`.
+        unnamed_svc = unit.new_service_ref()
+        del unnamed_svc['name']
         self.catalog_api.create_service(unnamed_svc['id'], unnamed_svc)
-        endpoint = self.new_endpoint_ref(service_id=unnamed_svc['id'])
-        self.catalog_api.create_endpoint(endpoint['id'], endpoint)
+        self.create_endpoint(service_id=unnamed_svc['id'])
 
         region = None
         catalog = self.catalog_api.get_catalog(user_id, tenant_id)
 
         self.assertEqual(named_svc['name'],
                          catalog[region][named_svc['type']]['name'])
+
+        # verify a name is not generated when the service is passed to the API
         self.assertEqual('', catalog[region][unnamed_svc['type']]['name'])

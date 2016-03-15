@@ -13,15 +13,16 @@
 # under the License.
 
 from oslo_serialization import jsonutils
+from six.moves import http_client
 import webtest
 
 from keystone.auth import controllers as auth_controllers
-from keystone.tests import unit as tests
+from keystone.tests import unit
 from keystone.tests.unit import default_fixtures
 from keystone.tests.unit.ksfixtures import database
 
 
-class RestfulTestCase(tests.TestCase):
+class RestfulTestCase(unit.TestCase):
     """Performs restful tests against the WSGI app over HTTP.
 
     This class launches public & admin WSGI servers for every test, which can
@@ -60,7 +61,7 @@ class RestfulTestCase(tests.TestCase):
         # Will need to reset the plug-ins
         self.addCleanup(setattr, auth_controllers, 'AUTH_METHODS', {})
 
-        self.useFixture(database.Database())
+        self.useFixture(database.Database(self.sql_driver_version_overrides))
         self.load_backends()
         self.load_fixtures(default_fixtures)
 
@@ -113,11 +114,10 @@ class RestfulTestCase(tests.TestCase):
 
         example::
 
-            self.assertResponseStatus(response, 204)
+            self.assertResponseStatus(response, http_client.NO_CONTENT)
         """
         self.assertEqual(
-            response.status_code,
-            expected_status,
+            expected_status, response.status_code,
             'Status code %s is not %s, as expected\n\n%s' %
             (response.status_code, expected_status, response.body))
 
@@ -125,15 +125,16 @@ class RestfulTestCase(tests.TestCase):
         """Ensures that response headers appear as expected."""
         self.assertIn('X-Auth-Token', response.headers.get('Vary'))
 
-    def assertValidErrorResponse(self, response, expected_status=400):
+    def assertValidErrorResponse(self, response,
+                                 expected_status=http_client.BAD_REQUEST):
         """Verify that the error response is valid.
 
         Subclasses can override this function based on the expected response.
 
         """
-        self.assertEqual(response.status_code, expected_status)
+        self.assertEqual(expected_status, response.status_code)
         error = response.result['error']
-        self.assertEqual(error['code'], response.status_code)
+        self.assertEqual(response.status_code, error['code'])
         self.assertIsNotNone(error.get('title'))
 
     def _to_content_type(self, body, headers, content_type=None):
@@ -144,7 +145,11 @@ class RestfulTestCase(tests.TestCase):
             headers['Accept'] = 'application/json'
             if body:
                 headers['Content-Type'] = 'application/json'
-                return jsonutils.dumps(body)
+                # NOTE(davechen):dump the body to bytes since WSGI requires
+                # the body of the response to be `Bytestrings`.
+                # see pep-3333:
+                # https://www.python.org/dev/peps/pep-3333/#a-note-on-string-types
+                return jsonutils.dump_as_bytes(body)
 
     def _from_content_type(self, response, content_type=None):
         """Attempt to decode JSON and XML automatically, if detected."""
@@ -184,7 +189,8 @@ class RestfulTestCase(tests.TestCase):
         self._from_content_type(response, content_type=response_content_type)
 
         # we can save some code & improve coverage by always doing this
-        if method != 'HEAD' and response.status_code >= 400:
+        if (method != 'HEAD' and
+                response.status_code >= http_client.BAD_REQUEST):
             self.assertValidErrorResponse(response)
 
         # Contains the decoded response.body
@@ -209,6 +215,17 @@ class RestfulTestCase(tests.TestCase):
         """Convenience method so that we can test authenticated requests."""
         r = self.public_request(method='POST', path='/v2.0/tokens', body=body)
         return self._get_token_id(r)
+
+    def get_admin_token(self):
+        return self._get_token({
+            'auth': {
+                'passwordCredentials': {
+                    'username': self.user_reqadmin['name'],
+                    'password': self.user_reqadmin['password']
+                },
+                'tenantId': 'service'
+            }
+        })
 
     def get_unscoped_token(self):
         """Convenience method so that we can test authenticated requests."""

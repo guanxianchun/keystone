@@ -17,7 +17,7 @@ from oslo_config import cfg
 from keystone.common import cache
 from keystone.common import ldap as common_ldap
 from keystone.common.ldap import core as common_ldap_core
-from keystone.tests import unit as tests
+from keystone.tests import unit
 from keystone.tests.unit import default_fixtures
 from keystone.tests.unit import fakeldap
 from keystone.tests.unit.ksfixtures import database
@@ -66,7 +66,7 @@ class BaseBackendLdapCommon(object):
 
     def config_files(self):
         config_files = super(BaseBackendLdapCommon, self).config_files()
-        config_files.append(tests.dirs.tests_conf('backend_ldap.conf'))
+        config_files.append(unit.dirs.tests_conf('backend_ldap.conf'))
         return config_files
 
     def get_user_enabled_vals(self, user):
@@ -86,6 +86,7 @@ class BaseBackendLdapCommon(object):
 
 class BaseBackendLdap(object):
     """Mixin class to set up an all-LDAP configuration."""
+
     def setUp(self):
         # NOTE(dstanek): The database must be setup prior to calling the
         # parent's setUp. The parent's setUp uses services (like
@@ -99,13 +100,13 @@ class BaseBackendLdap(object):
         super(BaseBackendLdap, self).load_fixtures(fixtures)
 
 
-class BaseBackendLdapIdentitySqlEverythingElse(tests.SQLDriverOverrides):
+class BaseBackendLdapIdentitySqlEverythingElse(unit.SQLDriverOverrides):
     """Mixin base for Identity LDAP, everything else SQL backend tests."""
 
     def config_files(self):
         config_files = super(BaseBackendLdapIdentitySqlEverythingElse,
                              self).config_files()
-        config_files.append(tests.dirs.tests_conf('backend_ldap_sql.conf'))
+        config_files.append(unit.dirs.tests_conf('backend_ldap_sql.conf'))
         return config_files
 
     def setUp(self):
@@ -113,7 +114,7 @@ class BaseBackendLdapIdentitySqlEverythingElse(tests.SQLDriverOverrides):
         super(BaseBackendLdapIdentitySqlEverythingElse, self).setUp()
         self.clear_database()
         self.load_backends()
-        cache.configure_cache_region(cache.REGION)
+        cache.configure_cache()
 
         sqldb.recreate()
         self.load_fixtures(default_fixtures)
@@ -137,6 +138,7 @@ class BaseBackendLdapIdentitySqlEverythingElseWithMapping(object):
     Setting backward_compatible_ids to False will enable this mapping.
 
     """
+
     def config_overrides(self):
         super(BaseBackendLdapIdentitySqlEverythingElseWithMapping,
               self).config_overrides()

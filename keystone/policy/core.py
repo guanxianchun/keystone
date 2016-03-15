@@ -82,7 +82,7 @@ class Manager(manager.Manager):
 
 
 @six.add_metaclass(abc.ABCMeta)
-class Driver(object):
+class PolicyDriverV8(object):
 
     def _get_list_limit(self):
         return CONF.policy.list_limit or CONF.list_limit
@@ -100,7 +100,7 @@ class Driver(object):
     def create_policy(self, policy_id, policy):
         """Store a policy blob.
 
-        :raises: keystone.exception.Conflict
+        :raises keystone.exception.Conflict: If a duplicate policy exists.
 
         """
         raise exception.NotImplemented()  # pragma: no cover
@@ -114,7 +114,7 @@ class Driver(object):
     def get_policy(self, policy_id):
         """Retrieve a specific policy blob.
 
-        :raises: keystone.exception.PolicyNotFound
+        :raises keystone.exception.PolicyNotFound: If the policy doesn't exist.
 
         """
         raise exception.NotImplemented()  # pragma: no cover
@@ -123,7 +123,7 @@ class Driver(object):
     def update_policy(self, policy_id, policy):
         """Update a policy blob.
 
-        :raises: keystone.exception.PolicyNotFound
+        :raises keystone.exception.PolicyNotFound: If the policy doesn't exist.
 
         """
         raise exception.NotImplemented()  # pragma: no cover
@@ -132,7 +132,10 @@ class Driver(object):
     def delete_policy(self, policy_id):
         """Remove a policy blob.
 
-        :raises: keystone.exception.PolicyNotFound
+        :raises keystone.exception.PolicyNotFound: If the policy doesn't exist.
 
         """
         raise exception.NotImplemented()  # pragma: no cover
+
+
+Driver = manager.create_legacy_driver(PolicyDriverV8)

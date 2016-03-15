@@ -22,20 +22,20 @@ from oslo_config import fixture as config_fixture
 
 from keystone import exception
 from keystone import identity
-from keystone.tests import unit as tests
+from keystone.tests import unit
 from keystone.tests.unit.ksfixtures import database
 
 
 CONF = cfg.CONF
 
 
-class TestDomainConfigs(tests.BaseTestCase):
+class TestDomainConfigs(unit.BaseTestCase):
 
     def setUp(self):
         super(TestDomainConfigs, self).setUp()
         self.addCleanup(CONF.reset)
 
-        self.tmp_dir = tests.dirs.tmp()
+        self.tmp_dir = unit.dirs.tmp()
 
         self.config_fixture = self.useFixture(config_fixture.Config(CONF))
         self.config_fixture.config(domain_config_dir=self.tmp_dir,
@@ -125,7 +125,7 @@ class TestDomainConfigs(tests.BaseTestCase):
                     self.assertEqual(3, load_driver_mock.call_count)
 
 
-class TestDatabaseDomainConfigs(tests.TestCase):
+class TestDatabaseDomainConfigs(unit.TestCase):
 
     def setUp(self):
         super(TestDatabaseDomainConfigs, self).setUp()
@@ -138,7 +138,7 @@ class TestDatabaseDomainConfigs(tests.TestCase):
     def test_loading_config_from_database(self):
         self.config_fixture.config(domain_configurations_from_database=True,
                                    group='identity')
-        domain = {'id': uuid.uuid4().hex, 'name': uuid.uuid4().hex}
+        domain = unit.new_domain_ref()
         self.resource_api.create_domain(domain['id'], domain)
         # Override two config options for our domain
         conf = {'ldap': {'url': uuid.uuid4().hex,
@@ -165,7 +165,7 @@ class TestDatabaseDomainConfigs(tests.TestCase):
         # Now turn off using database domain configuration and check that the
         # default config file values are now seen instead of the overrides.
         CONF.set_override('domain_configurations_from_database', False,
-                          'identity')
+                          'identity', enforce_type=True)
         domain_config = identity.DomainConfigs()
         domain_config.setup_domain_drivers(fake_standard_driver,
                                            self.resource_api)

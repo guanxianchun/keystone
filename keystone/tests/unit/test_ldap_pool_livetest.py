@@ -19,7 +19,7 @@ from oslo_config import cfg
 
 from keystone.common.ldap import core as ldap_core
 from keystone.identity.backends import ldap
-from keystone.tests import unit as tests
+from keystone.tests import unit
 from keystone.tests.unit import fakeldap
 from keystone.tests.unit import test_backend_ldap_pool
 from keystone.tests.unit import test_ldap_livetest
@@ -44,8 +44,7 @@ class LiveLDAPPoolIdentity(test_backend_ldap_pool.LdapPoolCommonTestMixin,
 
     def config_files(self):
         config_files = super(LiveLDAPPoolIdentity, self).config_files()
-        config_files.append(tests.dirs.
-                            tests_conf('backend_pool_liveldap.conf'))
+        config_files.append(unit.dirs.tests_conf('backend_pool_liveldap.conf'))
         return config_files
 
     def test_assert_connector_used_not_fake_ldap_pool(self):
@@ -106,6 +105,7 @@ class LiveLDAPPoolIdentity(test_backend_ldap_pool.LdapPoolCommonTestMixin,
                           password=old_password)
 
     def _create_user_and_authenticate(self, password):
+        # TODO(shaleh): port to new_user_ref()
         user_dict = {
             'domain_id': CONF.identity.default_domain_id,
             'name': uuid.uuid4().hex,
@@ -184,7 +184,7 @@ class LiveLDAPPoolIdentity(test_backend_ldap_pool.LdapPoolCommonTestMixin,
         user_ref = self.identity_api.authenticate(
             context={}, user_id=user['id'], password=old_password)
 
-        self.assertDictEqual(user_ref, user)
+        self.assertDictEqual(user, user_ref)
 
     def test_password_change_with_auth_pool_enabled_no_lifetime(self):
         self.config_fixture.config(group='ldap',

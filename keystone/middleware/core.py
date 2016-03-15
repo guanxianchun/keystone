@@ -14,20 +14,15 @@
 
 from oslo_config import cfg
 from oslo_log import log
-from oslo_log import versionutils
-from oslo_middleware import sizelimit
 from oslo_serialization import jsonutils
 
-from keystone.common import authorization
 from keystone.common import wsgi
 from keystone import exception
 from keystone.i18n import _LW
-from keystone.models import token_model
 
 
 CONF = cfg.CONF
 LOG = log.getLogger(__name__)
-
 
 # Header used to transmit the auth token
 AUTH_TOKEN_HEADER = 'X-Auth-Token'
@@ -63,32 +58,19 @@ class AdminTokenAuthMiddleware(wsgi.Middleware):
 
     """
 
+    def __init__(self, application):
+        super(AdminTokenAuthMiddleware, self).__init__(application)
+        LOG.warning(_LW("The admin_token_auth middleware presents a security "
+                        "risk and should be removed from the "
+                        "[pipeline:api_v3], [pipeline:admin_api], and "
+                        "[pipeline:public_api] sections of your paste ini "
+                        "file."))
+
     def process_request(self, request):
         token = request.headers.get(AUTH_TOKEN_HEADER)
         context = request.environ.get(CONTEXT_ENV, {})
-        context['is_admin'] = (token == CONF.admin_token)
+        context['is_admin'] = CONF.admin_token and (token == CONF.admin_token)
         request.environ[CONTEXT_ENV] = context
-
-
-class PostParamsMiddleware(wsgi.Middleware):
-    """Middleware to allow method arguments to be passed as POST parameters.
-
-    Filters out the parameters `self`, `context` and anything beginning with
-    an underscore.
-
-    """
-
-    def process_request(self, request):
-        params_parsed = request.params
-        params = {}
-        for k, v in params_parsed.items():
-            if k in ('self', 'context'):
-                continue
-            if k.startswith('_'):
-                continue
-            params[k] = v
-
-        request.environ[PARAMS_ENV] = params
 
 
 class JsonBodyMiddleware(wsgi.Middleware):
@@ -101,6 +83,7 @@ class JsonBodyMiddleware(wsgi.Middleware):
     an underscore.
 
     """
+
     def process_request(self, request):
         # Abort early if we don't have any work to do
         params_json = request.body
@@ -153,58 +136,3 @@ class NormalizingFilter(wsgi.Middleware):
         # Rewrites path to root if no path is given.
         elif not request.environ['PATH_INFO']:
             request.environ['PATH_INFO'] = '/'
-
-
-class RequestBodySizeLimiter(sizelimit.RequestBodySizeLimiter):
-    @versionutils.deprecated(
-        versionutils.deprecated.KILO,
-        in_favor_of='oslo_middleware.sizelimit.RequestBodySizeLimiter',
-        remove_in=+1,
-        what='keystone.middleware.RequestBodySizeLimiter')
-    def __init__(self, *args, **kwargs):
-        super(RequestBodySizeLimiter, self).__init__(*args, **kwargs)
-
-
-class AuthContextMiddleware(wsgi.Middleware):
-    """Build the authentication context from the request auth token."""
-
-    def _build_auth_context(self, request):
-        token_id = request.headers.get(AUTH_TOKEN_HEADER).strip()
-
-        if token_id == CONF.admin_token:
-            # NOTE(gyee): no need to proceed any further as the special admin
-            # token is being handled by AdminTokenAuthMiddleware. This code
-            # will not be impacted even if AdminTokenAuthMiddleware is removed
-            # from the pipeline as "is_admin" is default to "False". This code
-            # is independent of AdminTokenAuthMiddleware.
-            return {}
-
-        context = {'token_id': token_id}
-        context['environment'] = request.environ
-
-        try:
-            token_ref = token_model.KeystoneToken(
-                token_id=token_id,
-                token_data=self.token_provider_api.validate_token(token_id))
-            # TODO(gyee): validate_token_bind should really be its own
-            # middleware
-            wsgi.validate_token_bind(context, token_ref)
-            return authorization.token_to_auth_context(token_ref)
-        except exception.TokenNotFound:
-            LOG.warning(_LW('RBAC: Invalid token'))
-            raise exception.Unauthorized()
-
-    def process_request(self, request):
-        if AUTH_TOKEN_HEADER not in request.headers:
-            LOG.debug(('Auth token not in the request header. '
-                       'Will not build auth context.'))
-            return
-
-        if authorization.AUTH_CONTEXT_ENV in request.environ:
-            msg = _LW('Auth context already exists in the request environment')
-            LOG.warning(msg)
-            return
-
-        auth_context = self._build_auth_context(request)
-        LOG.debug('RBAC: auth_context: %s', auth_context)
-        request.environ[authorization.AUTH_CONTEXT_ENV] = auth_context

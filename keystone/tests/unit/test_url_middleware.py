@@ -15,18 +15,19 @@
 import webob
 
 from keystone import middleware
-from keystone.tests import unit as tests
+from keystone.tests import unit
 
 
 class FakeApp(object):
     """Fakes a WSGI app URL normalized."""
+
     def __call__(self, env, start_response):
         resp = webob.Response()
         resp.body = 'SUCCESS'
         return resp(env, start_response)
 
 
-class UrlMiddlewareTest(tests.TestCase):
+class UrlMiddlewareTest(unit.TestCase):
     def setUp(self):
         self.middleware = middleware.NormalizingFilter(FakeApp())
         self.response_status = None

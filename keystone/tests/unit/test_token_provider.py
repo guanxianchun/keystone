@@ -16,11 +16,12 @@ import datetime
 
 from oslo_config import cfg
 from oslo_utils import timeutils
+from six.moves import reload_module
 
 from keystone.common import dependency
 from keystone.common import utils
 from keystone import exception
-from keystone.tests import unit as tests
+from keystone.tests import unit
 from keystone.tests.unit.ksfixtures import database
 from keystone import token
 from keystone.token.providers import fernet
@@ -712,7 +713,7 @@ SAMPLE_MALFORMED_TOKEN = {
 }
 
 
-class TestTokenProvider(tests.TestCase):
+class TestTokenProvider(unit.TestCase):
     def setUp(self):
         super(TestTokenProvider, self).setUp()
         self.useFixture(database.Database())
@@ -781,6 +782,12 @@ class TestTokenProvider(tests.TestCase):
         self.assertIsNone(
             self.token_provider_api._is_valid_token(create_v3_token()))
 
+    def test_no_token_raises_token_not_found(self):
+        self.assertRaises(
+            exception.TokenNotFound,
+            self.token_provider_api.validate_token,
+            None)
+
 
 # NOTE(ayoung): renamed to avoid automatic test detection
 class PKIProviderTests(object):
@@ -803,7 +810,8 @@ class PKIProviderTests(object):
         self.cms.subprocess = self.target_subprocess
         self.environment.subprocess = self.target_subprocess
 
-        reload(pki)  # force module reload so the imports get re-evaluated
+        # force module reload so the imports get re-evaluated
+        reload_module(pki)
 
     def test_get_token_id_error_handling(self):
         # cause command-line failure
@@ -817,7 +825,7 @@ class PKIProviderTests(object):
                           token_data)
 
 
-class TestPKIProviderWithEventlet(PKIProviderTests, tests.TestCase):
+class TestPKIProviderWithEventlet(PKIProviderTests, unit.TestCase):
 
     def setUp(self):
         # force keystoneclient.common.cms to use eventlet's subprocess
@@ -827,7 +835,7 @@ class TestPKIProviderWithEventlet(PKIProviderTests, tests.TestCase):
         super(TestPKIProviderWithEventlet, self).setUp()
 
 
-class TestPKIProviderWithStdlib(PKIProviderTests, tests.TestCase):
+class TestPKIProviderWithStdlib(PKIProviderTests, unit.TestCase):
 
     def setUp(self):
         # force keystoneclient.common.cms to use the stdlib subprocess

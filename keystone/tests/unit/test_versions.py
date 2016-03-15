@@ -20,12 +20,14 @@ import random
 import mock
 from oslo_config import cfg
 from oslo_serialization import jsonutils
+from six.moves import http_client
 from testtools import matchers as tt_matchers
+import webob
 
 from keystone.common import json_home
-from keystone import controllers
-from keystone.tests import unit as tests
+from keystone.tests import unit
 from keystone.tests.unit import utils
+from keystone.version import controllers
 
 
 CONF = cfg.CONF
@@ -72,9 +74,9 @@ v3_MEDIA_TYPES = [
 ]
 
 v3_EXPECTED_RESPONSE = {
-    "id": "v3.4",
+    "id": "v3.6",
     "status": "stable",
-    "updated": "2015-03-30T00:00:00Z",
+    "updated": "2016-04-04T00:00:00Z",
     "links": [
         {
             "rel": "self",
@@ -129,6 +131,10 @@ _build_ep_filter_rel = functools.partial(
     json_home.build_v3_extension_resource_relation,
     extension_name='OS-EP-FILTER', extension_version='1.0')
 
+_build_os_inherit_rel = functools.partial(
+    json_home.build_v3_extension_resource_relation,
+    extension_name='OS-INHERIT', extension_version='1.0')
+
 TRUST_ID_PARAMETER_RELATION = json_home.build_v3_extension_parameter_relation(
     'OS-TRUST', '1.0', 'trust_id')
 
@@ -167,11 +173,12 @@ BASE_EP_FILTER = BASE_EP_FILTER_PREFIX + '/endpoint_groups/{endpoint_group_id}'
 BASE_ACCESS_TOKEN = (
     '/users/{user_id}/OS-OAUTH1/access_tokens/{access_token_id}')
 
-# TODO(stevemar): Use BASE_IDP_PROTOCOL when bug 1420125 is resolved.
-FEDERATED_AUTH_URL = ('/OS-FEDERATION/identity_providers/{identity_provider}'
-                      '/protocols/{protocol}/auth')
+FEDERATED_AUTH_URL = ('/OS-FEDERATION/identity_providers/{idp_id}'
+                      '/protocols/{protocol_id}/auth')
+FEDERATED_IDP_SPECIFIC_WEBSSO = ('/auth/OS-FEDERATION/identity_providers/'
+                                 '{idp_id}/protocols/{protocol_id}/websso')
 
-V3_JSON_HOME_RESOURCES_INHERIT_DISABLED = {
+V3_JSON_HOME_RESOURCES = {
     json_home.build_v3_resource_relation('auth_tokens'): {
         'href': '/auth/tokens'},
     json_home.build_v3_resource_relation('auth_catalog'): {
@@ -227,8 +234,8 @@ V3_JSON_HOME_RESOURCES_INHERIT_DISABLED = {
     _build_ec2tokens_relation(resource_name='user_credential'): {
         'href-template': '/users/{user_id}/credentials/OS-EC2/{credential_id}',
         'href-vars': {
-            'credential_id': json_home.build_v3_extension_parameter_relation(
-                'OS-EC2', '1.0', 'credential_id'),
+            'credential_id':
+            json_home.build_v3_parameter_relation('credential_id'),
             'user_id': json_home.Parameters.USER_ID, }},
     _build_ec2tokens_relation(resource_name='user_credentials'): {
         'href-template': '/users/{user_id}/credentials/OS-EC2',
@@ -320,6 +327,22 @@ V3_JSON_HOME_RESOURCES_INHERIT_DISABLED = {
         'href-template': '/roles/{role_id}',
         'href-vars': {
             'role_id': json_home.Parameters.ROLE_ID, }},
+    json_home.build_v3_resource_relation('implied_roles'): {
+        'href-template': '/roles/{prior_role_id}/implies',
+        'href-vars': {
+            'prior_role_id': json_home.Parameters.ROLE_ID},
+        'hints': {'status': 'experimental'}},
+    json_home.build_v3_resource_relation('implied_role'): {
+        'href-template':
+        '/roles/{prior_role_id}/implies/{implied_role_id}',
+        'href-vars': {
+            'prior_role_id': json_home.Parameters.ROLE_ID,
+            'implied_role_id': json_home.Parameters.ROLE_ID,
+        },
+        'hints': {'status': 'experimental'}},
+    json_home.build_v3_resource_relation('role_inferences'): {
+        'href': '/role_inferences',
+        'hints': {'status': 'experimental'}},
     json_home.build_v3_resource_relation('role_assignments'): {
         'href': '/role_assignments'},
     json_home.build_v3_resource_relation('roles'): {'href': '/roles'},
@@ -345,13 +368,13 @@ V3_JSON_HOME_RESOURCES_INHERIT_DISABLED = {
         'href-vars': {'user_id': json_home.Parameters.USER_ID, }},
     json_home.build_v3_resource_relation('users'): {'href': '/users'},
     _build_federation_rel(resource_name='domains'): {
-        'href': '/OS-FEDERATION/domains'},
+        'href': '/auth/domains'},
     _build_federation_rel(resource_name='websso'): {
         'href-template': '/auth/OS-FEDERATION/websso/{protocol_id}',
         'href-vars': {
             'protocol_id': PROTOCOL_ID_PARAM_RELATION, }},
     _build_federation_rel(resource_name='projects'): {
-        'href': '/OS-FEDERATION/projects'},
+        'href': '/auth/projects'},
     _build_federation_rel(resource_name='saml2'): {
         'href': '/auth/OS-FEDERATION/saml2'},
     _build_federation_rel(resource_name='ecp'): {
@@ -368,6 +391,11 @@ V3_JSON_HOME_RESOURCES_INHERIT_DISABLED = {
     {
         'href-template': '/OS-FEDERATION/identity_providers/{idp_id}',
         'href-vars': {'idp_id': IDP_ID_PARAMETER_RELATION, }},
+    _build_federation_rel(resource_name='identity_providers'): {
+        'href-template': FEDERATED_IDP_SPECIFIC_WEBSSO,
+        'href-vars': {
+            'idp_id': IDP_ID_PARAMETER_RELATION,
+            'protocol_id': PROTOCOL_ID_PARAM_RELATION, }},
     _build_federation_rel(resource_name='service_provider'):
     {
         'href-template': '/OS-FEDERATION/service_providers/{sp_id}',
@@ -385,12 +413,11 @@ V3_JSON_HOME_RESOURCES_INHERIT_DISABLED = {
         'href-template': BASE_IDP_PROTOCOL,
         'href-vars': {
             'idp_id': IDP_ID_PARAMETER_RELATION}},
-    # TODO(stevemar): Update href-vars when bug 1420125 is resolved.
     _build_federation_rel(resource_name='identity_provider_protocol_auth'): {
         'href-template': FEDERATED_AUTH_URL,
         'href-vars': {
-            'identity_provider': IDP_ID_PARAMETER_RELATION,
-            'protocol': PROTOCOL_ID_PARAM_RELATION, }},
+            'idp_id': IDP_ID_PARAMETER_RELATION,
+            'protocol_id': PROTOCOL_ID_PARAM_RELATION, }},
     _build_oauth1_rel(resource_name='access_tokens'): {
         'href': '/OS-OAUTH1/access_token'},
     _build_oauth1_rel(resource_name='request_tokens'): {
@@ -500,6 +527,58 @@ V3_JSON_HOME_RESOURCES_INHERIT_DISABLED = {
         'href-template': BASE_EP_FILTER + '/projects',
         'href-vars': {'endpoint_group_id':
                       ENDPOINT_GROUP_ID_PARAMETER_RELATION, }},
+    _build_os_inherit_rel(
+        resource_name='domain_user_role_inherited_to_projects'):
+    {
+        'href-template': '/OS-INHERIT/domains/{domain_id}/users/'
+        '{user_id}/roles/{role_id}/inherited_to_projects',
+        'href-vars': {
+            'domain_id': json_home.Parameters.DOMAIN_ID,
+            'role_id': json_home.Parameters.ROLE_ID,
+            'user_id': json_home.Parameters.USER_ID, }},
+    _build_os_inherit_rel(
+        resource_name='domain_group_role_inherited_to_projects'):
+    {
+        'href-template': '/OS-INHERIT/domains/{domain_id}/groups/'
+        '{group_id}/roles/{role_id}/inherited_to_projects',
+        'href-vars': {
+            'domain_id': json_home.Parameters.DOMAIN_ID,
+            'group_id': json_home.Parameters.GROUP_ID,
+            'role_id': json_home.Parameters.ROLE_ID, }},
+    _build_os_inherit_rel(
+        resource_name='domain_user_roles_inherited_to_projects'):
+    {
+        'href-template': '/OS-INHERIT/domains/{domain_id}/users/'
+        '{user_id}/roles/inherited_to_projects',
+        'href-vars': {
+            'domain_id': json_home.Parameters.DOMAIN_ID,
+            'user_id': json_home.Parameters.USER_ID, }},
+    _build_os_inherit_rel(
+        resource_name='domain_group_roles_inherited_to_projects'):
+    {
+        'href-template': '/OS-INHERIT/domains/{domain_id}/groups/'
+        '{group_id}/roles/inherited_to_projects',
+        'href-vars': {
+            'domain_id': json_home.Parameters.DOMAIN_ID,
+            'group_id': json_home.Parameters.GROUP_ID, }},
+    _build_os_inherit_rel(
+        resource_name='project_user_role_inherited_to_projects'):
+    {
+        'href-template': '/OS-INHERIT/projects/{project_id}/users/'
+        '{user_id}/roles/{role_id}/inherited_to_projects',
+        'href-vars': {
+            'project_id': json_home.Parameters.PROJECT_ID,
+            'role_id': json_home.Parameters.ROLE_ID,
+            'user_id': json_home.Parameters.USER_ID, }},
+    _build_os_inherit_rel(
+        resource_name='project_group_role_inherited_to_projects'):
+    {
+        'href-template': '/OS-INHERIT/projects/{project_id}/groups/'
+        '{group_id}/roles/{role_id}/inherited_to_projects',
+        'href-vars': {
+            'project_id': json_home.Parameters.PROJECT_ID,
+            'group_id': json_home.Parameters.GROUP_ID,
+            'role_id': json_home.Parameters.ROLE_ID, }},
     json_home.build_v3_resource_relation('domain_config'): {
         'href-template':
         '/domains/{domain_id}/config',
@@ -521,97 +600,51 @@ V3_JSON_HOME_RESOURCES_INHERIT_DISABLED = {
             'group': json_home.build_v3_parameter_relation('config_group'),
             'option': json_home.build_v3_parameter_relation('config_option')},
         'hints': {'status': 'experimental'}},
+    json_home.build_v3_resource_relation('domain_config_default'): {
+        'href': '/domains/config/default',
+        'hints': {'status': 'experimental'}},
+    json_home.build_v3_resource_relation('domain_config_default_group'): {
+        'href-template': '/domains/config/{group}/default',
+        'href-vars': {
+            'group': json_home.build_v3_parameter_relation('config_group')},
+        'hints': {'status': 'experimental'}},
+    json_home.build_v3_resource_relation('domain_config_default_option'): {
+        'href-template': '/domains/config/{group}/{option}/default',
+        'href-vars': {
+            'group': json_home.build_v3_parameter_relation('config_group'),
+            'option': json_home.build_v3_parameter_relation('config_option')},
+        'hints': {'status': 'experimental'}},
 }
 
 
-# with os-inherit enabled, there's some more resources.
+class TestClient(object):
+    def __init__(self, app=None, token=None):
+        self.app = app
+        self.token = token
 
-build_os_inherit_relation = functools.partial(
-    json_home.build_v3_extension_resource_relation,
-    extension_name='OS-INHERIT', extension_version='1.0')
+    def request(self, method, path, headers=None, body=None):
+        if headers is None:
+            headers = {}
 
-V3_JSON_HOME_RESOURCES_INHERIT_ENABLED = dict(
-    V3_JSON_HOME_RESOURCES_INHERIT_DISABLED)
-V3_JSON_HOME_RESOURCES_INHERIT_ENABLED.update(
-    (
-        (
-            build_os_inherit_relation(
-                resource_name='domain_user_role_inherited_to_projects'),
-            {
-                'href-template': '/OS-INHERIT/domains/{domain_id}/users/'
-                '{user_id}/roles/{role_id}/inherited_to_projects',
-                'href-vars': {
-                    'domain_id': json_home.Parameters.DOMAIN_ID,
-                    'role_id': json_home.Parameters.ROLE_ID,
-                    'user_id': json_home.Parameters.USER_ID,
-                },
-            }
-        ),
-        (
-            build_os_inherit_relation(
-                resource_name='domain_group_role_inherited_to_projects'),
-            {
-                'href-template': '/OS-INHERIT/domains/{domain_id}/groups/'
-                '{group_id}/roles/{role_id}/inherited_to_projects',
-                'href-vars': {
-                    'domain_id': json_home.Parameters.DOMAIN_ID,
-                    'group_id': json_home.Parameters.GROUP_ID,
-                    'role_id': json_home.Parameters.ROLE_ID,
-                },
-            }
-        ),
-        (
-            build_os_inherit_relation(
-                resource_name='domain_user_roles_inherited_to_projects'),
-            {
-                'href-template': '/OS-INHERIT/domains/{domain_id}/users/'
-                '{user_id}/roles/inherited_to_projects',
-                'href-vars': {
-                    'domain_id': json_home.Parameters.DOMAIN_ID,
-                    'user_id': json_home.Parameters.USER_ID,
-                },
-            }
-        ),
-        (
-            build_os_inherit_relation(
-                resource_name='domain_group_roles_inherited_to_projects'),
-            {
-                'href-template': '/OS-INHERIT/domains/{domain_id}/groups/'
-                '{group_id}/roles/inherited_to_projects',
-                'href-vars': {
-                    'domain_id': json_home.Parameters.DOMAIN_ID,
-                    'group_id': json_home.Parameters.GROUP_ID,
-                },
-            }
-        ),
-        (
-            build_os_inherit_relation(
-                resource_name='project_user_role_inherited_to_projects'),
-            {
-                'href-template': '/OS-INHERIT/projects/{project_id}/users/'
-                '{user_id}/roles/{role_id}/inherited_to_projects',
-                'href-vars': {
-                    'project_id': json_home.Parameters.PROJECT_ID,
-                    'role_id': json_home.Parameters.ROLE_ID,
-                    'user_id': json_home.Parameters.USER_ID,
-                },
-            }
-        ),
-        (
-            build_os_inherit_relation(
-                resource_name='project_group_role_inherited_to_projects'),
-            {
-                'href-template': '/OS-INHERIT/projects/{project_id}/groups/'
-                '{group_id}/roles/{role_id}/inherited_to_projects',
-                'href-vars': {
-                    'project_id': json_home.Parameters.PROJECT_ID,
-                    'group_id': json_home.Parameters.GROUP_ID,
-                    'role_id': json_home.Parameters.ROLE_ID,
-                },
-            }
-        ),
-    )
-)
+        if self.token:
+            headers.setdefault('X-Auth-Token', self.token)
+
+        req = webob.Request.blank(path)
+        req.method = method
+        for k, v in headers.items():
+            req.headers[k] = v
+        if body:
+            req.body = body
+        return req.get_response(self.app)
+
+    def get(self, path, headers=None):
+        return self.request('GET', path=path, headers=headers)
+
+    def post(self, path, headers=None, body=None):
+        return self.request('POST', path=path, headers=headers, body=body)
+
+    def put(self, path, headers=None, body=None):
+        return self.request('PUT', path=path, headers=headers, body=body)
 
 
 class _VersionsEqual(tt_matchers.MatchesListwise):
@@ -632,7 +665,7 @@ class _VersionsEqual(tt_matchers.MatchesListwise):
         ])
 
 
-class VersionTestCase(tests.TestCase):
+class VersionTestCase(unit.TestCase):
     def setUp(self):
         super(VersionTestCase, self).setUp()
         self.load_backends()
@@ -657,7 +690,7 @@ class VersionTestCase(tests.TestCase):
                 link['href'] = port
 
     def test_public_versions(self):
-        client = tests.TestClient(self.public_app)
+        client = TestClient(self.public_app)
         resp = client.get('/')
         self.assertEqual(300, resp.status_int)
         data = jsonutils.loads(resp.body)
@@ -674,7 +707,7 @@ class VersionTestCase(tests.TestCase):
         self.assertThat(data, _VersionsEqual(expected))
 
     def test_admin_versions(self):
-        client = tests.TestClient(self.admin_app)
+        client = TestClient(self.admin_app)
         resp = client.get('/')
         self.assertEqual(300, resp.status_int)
         data = jsonutils.loads(resp.body)
@@ -694,7 +727,7 @@ class VersionTestCase(tests.TestCase):
         self.config_fixture.config(public_endpoint=None, admin_endpoint=None)
 
         for app in (self.public_app, self.admin_app):
-            client = tests.TestClient(app)
+            client = TestClient(app)
             resp = client.get('/')
             self.assertEqual(300, resp.status_int)
             data = jsonutils.loads(resp.body)
@@ -710,9 +743,9 @@ class VersionTestCase(tests.TestCase):
             self.assertThat(data, _VersionsEqual(expected))
 
     def test_public_version_v2(self):
-        client = tests.TestClient(self.public_app)
+        client = TestClient(self.public_app)
         resp = client.get('/v2.0/')
-        self.assertEqual(200, resp.status_int)
+        self.assertEqual(http_client.OK, resp.status_int)
         data = jsonutils.loads(resp.body)
         expected = v2_VERSION_RESPONSE
         self._paste_in_port(expected['version'],
@@ -721,9 +754,9 @@ class VersionTestCase(tests.TestCase):
         self.assertEqual(expected, data)
 
     def test_admin_version_v2(self):
-        client = tests.TestClient(self.admin_app)
+        client = TestClient(self.admin_app)
         resp = client.get('/v2.0/')
-        self.assertEqual(200, resp.status_int)
+        self.assertEqual(http_client.OK, resp.status_int)
         data = jsonutils.loads(resp.body)
         expected = v2_VERSION_RESPONSE
         self._paste_in_port(expected['version'],
@@ -734,18 +767,18 @@ class VersionTestCase(tests.TestCase):
     def test_use_site_url_if_endpoint_unset_v2(self):
         self.config_fixture.config(public_endpoint=None, admin_endpoint=None)
         for app in (self.public_app, self.admin_app):
-            client = tests.TestClient(app)
+            client = TestClient(app)
             resp = client.get('/v2.0/')
-            self.assertEqual(200, resp.status_int)
+            self.assertEqual(http_client.OK, resp.status_int)
             data = jsonutils.loads(resp.body)
             expected = v2_VERSION_RESPONSE
             self._paste_in_port(expected['version'], 'http://localhost/v2.0/')
             self.assertEqual(data, expected)
 
     def test_public_version_v3(self):
-        client = tests.TestClient(self.public_app)
+        client = TestClient(self.public_app)
         resp = client.get('/v3/')
-        self.assertEqual(200, resp.status_int)
+        self.assertEqual(http_client.OK, resp.status_int)
         data = jsonutils.loads(resp.body)
         expected = v3_VERSION_RESPONSE
         self._paste_in_port(expected['version'],
@@ -755,9 +788,9 @@ class VersionTestCase(tests.TestCase):
 
     @utils.wip('waiting on bug #1381961')
     def test_admin_version_v3(self):
-        client = tests.TestClient(self.admin_app)
+        client = TestClient(self.admin_app)
         resp = client.get('/v3/')
-        self.assertEqual(200, resp.status_int)
+        self.assertEqual(http_client.OK, resp.status_int)
         data = jsonutils.loads(resp.body)
         expected = v3_VERSION_RESPONSE
         self._paste_in_port(expected['version'],
@@ -768,9 +801,9 @@ class VersionTestCase(tests.TestCase):
     def test_use_site_url_if_endpoint_unset_v3(self):
         self.config_fixture.config(public_endpoint=None, admin_endpoint=None)
         for app in (self.public_app, self.admin_app):
-            client = tests.TestClient(app)
+            client = TestClient(app)
             resp = client.get('/v3/')
-            self.assertEqual(200, resp.status_int)
+            self.assertEqual(http_client.OK, resp.status_int)
             data = jsonutils.loads(resp.body)
             expected = v3_VERSION_RESPONSE
             self._paste_in_port(expected['version'], 'http://localhost/v3/')
@@ -778,14 +811,14 @@ class VersionTestCase(tests.TestCase):
 
     @mock.patch.object(controllers, '_VERSIONS', ['v3'])
     def test_v2_disabled(self):
-        client = tests.TestClient(self.public_app)
+        client = TestClient(self.public_app)
         # request to /v2.0 should fail
         resp = client.get('/v2.0/')
-        self.assertEqual(404, resp.status_int)
+        self.assertEqual(http_client.NOT_FOUND, resp.status_int)
 
         # request to /v3 should pass
         resp = client.get('/v3/')
-        self.assertEqual(200, resp.status_int)
+        self.assertEqual(http_client.OK, resp.status_int)
         data = jsonutils.loads(resp.body)
         expected = v3_VERSION_RESPONSE
         self._paste_in_port(expected['version'],
@@ -811,14 +844,14 @@ class VersionTestCase(tests.TestCase):
 
     @mock.patch.object(controllers, '_VERSIONS', ['v2.0'])
     def test_v3_disabled(self):
-        client = tests.TestClient(self.public_app)
+        client = TestClient(self.public_app)
         # request to /v3 should fail
         resp = client.get('/v3/')
-        self.assertEqual(404, resp.status_int)
+        self.assertEqual(http_client.NOT_FOUND, resp.status_int)
 
         # request to /v2.0 should pass
         resp = client.get('/v2.0/')
-        self.assertEqual(200, resp.status_int)
+        self.assertEqual(http_client.OK, resp.status_int)
         data = jsonutils.loads(resp.body)
         expected = v2_VERSION_RESPONSE
         self._paste_in_port(expected['version'],
@@ -843,7 +876,7 @@ class VersionTestCase(tests.TestCase):
         self.assertEqual(v2_only_response, data)
 
     def _test_json_home(self, path, exp_json_home_data):
-        client = tests.TestClient(self.public_app)
+        client = TestClient(self.public_app)
         resp = client.get(path, headers={'Accept': 'application/json-home'})
 
         self.assertThat(resp.status, tt_matchers.Equals('200 OK'))
@@ -858,7 +891,7 @@ class VersionTestCase(tests.TestCase):
         # then the server responds with a JSON Home document.
 
         exp_json_home_data = {
-            'resources': V3_JSON_HOME_RESOURCES_INHERIT_DISABLED}
+            'resources': V3_JSON_HOME_RESOURCES}
 
         self._test_json_home('/v3', exp_json_home_data)
 
@@ -867,7 +900,7 @@ class VersionTestCase(tests.TestCase):
         # then the server responds with a JSON Home document.
 
         exp_json_home_data = copy.deepcopy({
-            'resources': V3_JSON_HOME_RESOURCES_INHERIT_DISABLED})
+            'resources': V3_JSON_HOME_RESOURCES})
         json_home.translate_urls(exp_json_home_data, '/v3')
 
         self._test_json_home('/', exp_json_home_data)
@@ -876,7 +909,7 @@ class VersionTestCase(tests.TestCase):
         # Accept headers with multiple types and qvalues are handled.
 
         def make_request(accept_types=None):
-            client = tests.TestClient(self.public_app)
+            client = TestClient(self.public_app)
             headers = None
             if accept_types:
                 headers = {'Accept': accept_types}
@@ -926,7 +959,7 @@ class VersionTestCase(tests.TestCase):
         self.assertIsNone(extensions_property)
 
 
-class VersionSingleAppTestCase(tests.TestCase):
+class VersionSingleAppTestCase(unit.TestCase):
     """Tests running with a single application loaded.
 
     These are important because when Keystone is running in Apache httpd
@@ -962,7 +995,7 @@ class VersionSingleAppTestCase(tests.TestCase):
             else:
                 return CONF.eventlet_server.public_port
         app = self.loadapp('keystone', app_name)
-        client = tests.TestClient(app)
+        client = TestClient(app)
         resp = client.get('/')
         self.assertEqual(300, resp.status_int)
         data = jsonutils.loads(resp.body)
@@ -983,46 +1016,7 @@ class VersionSingleAppTestCase(tests.TestCase):
         self._test_version('admin')
 
 
-class VersionInheritEnabledTestCase(tests.TestCase):
-    def setUp(self):
-        super(VersionInheritEnabledTestCase, self).setUp()
-        self.load_backends()
-        self.public_app = self.loadapp('keystone', 'main')
-        self.admin_app = self.loadapp('keystone', 'admin')
-
-        self.config_fixture.config(
-            public_endpoint='http://localhost:%(public_port)d',
-            admin_endpoint='http://localhost:%(admin_port)d')
-
-    def config_overrides(self):
-        super(VersionInheritEnabledTestCase, self).config_overrides()
-        admin_port = random.randint(10000, 30000)
-        public_port = random.randint(40000, 60000)
-        self.config_fixture.config(group='eventlet_server',
-                                   public_port=public_port,
-                                   admin_port=admin_port)
-
-        self.config_fixture.config(group='os_inherit', enabled=True)
-
-    def test_json_home_v3(self):
-        # If the request is /v3 and the Accept header is application/json-home
-        # then the server responds with a JSON Home document.
-
-        client = tests.TestClient(self.public_app)
-        resp = client.get('/v3/', headers={'Accept': 'application/json-home'})
-
-        self.assertThat(resp.status, tt_matchers.Equals('200 OK'))
-        self.assertThat(resp.headers['Content-Type'],
-                        tt_matchers.Equals('application/json-home'))
-
-        exp_json_home_data = {
-            'resources': V3_JSON_HOME_RESOURCES_INHERIT_ENABLED}
-
-        self.assertThat(jsonutils.loads(resp.body),
-                        tt_matchers.Equals(exp_json_home_data))
-
-
-class VersionBehindSslTestCase(tests.TestCase):
+class VersionBehindSslTestCase(unit.TestCase):
     def setUp(self):
         super(VersionBehindSslTestCase, self).setUp()
         self.load_backends()
@@ -1048,7 +1042,7 @@ class VersionBehindSslTestCase(tests.TestCase):
         return expected
 
     def test_versions_without_headers(self):
-        client = tests.TestClient(self.public_app)
+        client = TestClient(self.public_app)
         host_name = 'host-%d' % random.randint(10, 30)
         host_port = random.randint(10000, 30000)
         host = 'http://%s:%s/' % (host_name, host_port)
@@ -1059,7 +1053,7 @@ class VersionBehindSslTestCase(tests.TestCase):
         self.assertThat(data, _VersionsEqual(expected))
 
     def test_versions_with_header(self):
-        client = tests.TestClient(self.public_app)
+        client = TestClient(self.public_app)
         host_name = 'host-%d' % random.randint(10, 30)
         host_port = random.randint(10000, 30000)
         resp = client.get('http://%s:%s/' % (host_name, host_port),

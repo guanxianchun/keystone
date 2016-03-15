@@ -44,18 +44,18 @@ def init():
 def enforce(credentials, action, target, do_raise=True):
     """Verifies that the action is valid on the target in this context.
 
-       :param credentials: user credentials
-       :param action: string representing the action to be checked, which
-                      should be colon separated for clarity.
-       :param target: dictionary representing the object of the action
-                      for object creation this should be a dictionary
-                      representing the location of the object e.g.
-                      {'project_id': object.project_id}
-       :raises: `exception.Forbidden` if verification fails.
+    :param credentials: user credentials
+    :param action: string representing the action to be checked, which should
+                   be colon separated for clarity.
+    :param target: dictionary representing the object of the action for object
+                   creation this should be a dictionary representing the
+                   location of the object e.g. {'project_id':
+                   object.project_id}
+    :raises keystone.exception.Forbidden: If verification fails.
 
-       Actions should be colon separated for clarity. For example:
+    Actions should be colon separated for clarity. For example:
 
-        * identity:list_users
+    * identity:list_users
 
     """
     init()
@@ -69,7 +69,7 @@ def enforce(credentials, action, target, do_raise=True):
     return _ENFORCER.enforce(action, target, credentials, **extra)
 
 
-class Policy(policy.Driver):
+class Policy(policy.PolicyDriverV8):
     def enforce(self, credentials, action, target):
         LOG.debug('enforce %(action)s: %(credentials)s', {
             'action': action,

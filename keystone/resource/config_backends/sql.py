@@ -42,7 +42,13 @@ class SensitiveConfig(sql.ModelBase, sql.ModelDictMixin):
         return d
 
 
-class DomainConfig(resource.DomainConfigDriver):
+class ConfigRegister(sql.ModelBase, sql.ModelDictMixin):
+    __tablename__ = 'config_register'
+    type = sql.Column(sql.String(64), primary_key=True)
+    domain_id = sql.Column(sql.String(64), nullable=False)
+
+
+class DomainConfig(resource.DomainConfigDriverV8):
 
     def choose_table(self, sensitive):
         if sensitive:
@@ -53,12 +59,12 @@ class DomainConfig(resource.DomainConfigDriver):
     @sql.handle_conflicts(conflict_type='domain_config')
     def create_config_option(self, domain_id, group, option, value,
                              sensitive=False):
-        with sql.transaction() as session:
+        with sql.session_for_write() as session:
             config_table = self.choose_table(sensitive)
             ref = config_table(domain_id=domain_id, group=group,
                                option=option, value=value)
             session.add(ref)
-        return ref.to_dict()
+            return ref.to_dict()
 
     def _get_config_option(self, session, domain_id, group, option, sensitive):
         try:
@@ -74,14 +80,14 @@ class DomainConfig(resource.DomainConfigDriver):
         return ref
 
     def get_config_option(self, domain_id, group, option, sensitive=False):
-        with sql.transaction() as session:
+        with sql.session_for_read() as session:
             ref = self._get_config_option(session, domain_id, group, option,
                                           sensitive)
-        return ref.to_dict()
+            return ref.to_dict()
 
     def list_config_options(self, domain_id, group=None, option=None,
                             sensitive=False):
-        with sql.transaction() as session:
+        with sql.session_for_read() as session:
             config_table = self.choose_table(sensitive)
             query = session.query(config_table)
             query = query.filter_by(domain_id=domain_id)
@@ -93,11 +99,11 @@ class DomainConfig(resource.DomainConfigDriver):
 
     def update_config_option(self, domain_id, group, option, value,
                              sensitive=False):
-        with sql.transaction() as session:
+        with sql.session_for_write() as session:
             ref = self._get_config_option(session, domain_id, group, option,
                                           sensitive)
             ref.value = value
-        return ref.to_dict()
+            return ref.to_dict()
 
     def delete_config_options(self, domain_id, group=None, option=None,
                               sensitive=False):
@@ -108,7 +114,7 @@ class DomainConfig(resource.DomainConfigDriver):
         if there was nothing to delete.
 
         """
-        with sql.transaction() as session:
+        with sql.session_for_write() as session:
             config_table = self.choose_table(sensitive)
             query = session.query(config_table)
             query = query.filter_by(domain_id=domain_id)
@@ -116,4 +122,31 @@ class DomainConfig(resource.DomainConfigDriver):
                 query = query.filter_by(group=group)
                 if option:
                     query = query.filter_by(option=option)
+            query.delete(False)
+
+    def obtain_registration(self, domain_id, type):
+        try:
+            with sql.session_for_write() as session:
+                ref = ConfigRegister(type=type, domain_id=domain_id)
+                session.add(ref)
+            return True
+        except sql.DBDuplicateEntry:  # nosec
+            # Continue on and return False to indicate failure.
+            pass
+        return False
+
+    def read_registration(self, type):
+        with sql.session_for_read() as session:
+            ref = session.query(ConfigRegister).get(type)
+            if not ref:
+                raise exception.ConfigRegistrationNotFound()
+            return ref.domain_id
+
+    def release_registration(self, domain_id, type=None):
+        """Silently delete anything registered for the domain specified."""
+        with sql.session_for_write() as session:
+            query = session.query(ConfigRegister)
+            if type:
+                query = query.filter_by(type=type)
+            query = query.filter_by(domain_id=domain_id)
             query.delete(False)

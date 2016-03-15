@@ -18,7 +18,7 @@ import mock
 
 from keystone import auth
 from keystone import exception
-from keystone.tests import unit as tests
+from keystone.tests import unit
 
 
 # for testing purposes only
@@ -37,7 +37,7 @@ class SimpleChallengeResponse(auth.AuthMethodHandler):
             return {"challenge": "What's the name of your high school?"}
 
 
-class TestAuthPlugin(tests.SQLDriverOverrides, tests.TestCase):
+class TestAuthPlugin(unit.SQLDriverOverrides, unit.TestCase):
     def setUp(self):
         super(TestAuthPlugin, self).setUp()
         self.load_backends()
@@ -121,11 +121,11 @@ class TestAuthPluginDynamicOptions(TestAuthPlugin):
 
     def config_files(self):
         config_files = super(TestAuthPluginDynamicOptions, self).config_files()
-        config_files.append(tests.dirs.tests_conf('test_auth_plugin.conf'))
+        config_files.append(unit.dirs.tests_conf('test_auth_plugin.conf'))
         return config_files
 
 
-class TestMapped(tests.TestCase):
+class TestMapped(unit.TestCase):
     def setUp(self):
         super(TestMapped, self).setUp()
         self.load_backends()
@@ -134,7 +134,7 @@ class TestMapped(tests.TestCase):
 
     def config_files(self):
         config_files = super(TestMapped, self).config_files()
-        config_files.append(tests.dirs.tests_conf('test_auth_plugin.conf'))
+        config_files.append(unit.dirs.tests_conf('test_auth_plugin.conf'))
         return config_files
 
     def auth_plugin_config_override(self, methods=None, **method_classes):
@@ -183,7 +183,7 @@ class TestMapped(tests.TestCase):
             # make sure Mapped plugin got invoked with the correct payload
             ((context, auth_payload, auth_context),
              kwargs) = authenticate.call_args
-            self.assertEqual(auth_payload['protocol'], method_name)
+            self.assertEqual(method_name, auth_payload['protocol'])
 
     def test_supporting_multiple_methods(self):
         for method_name in ['saml2', 'openid', 'x509']:

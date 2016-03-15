@@ -16,31 +16,18 @@
 import json
 import os
 
-import mock
 from oslo_policy import policy as common_policy
 import six
-from six.moves.urllib import request as urlrequest
 from testtools import matchers
 
 from keystone import exception
 from keystone.policy.backends import rules
-from keystone.tests import unit as tests
+from keystone.tests import unit
+from keystone.tests.unit import ksfixtures
 from keystone.tests.unit.ksfixtures import temporaryfile
 
 
-class BasePolicyTestCase(tests.TestCase):
-    def setUp(self):
-        super(BasePolicyTestCase, self).setUp()
-        rules.reset()
-        self.addCleanup(rules.reset)
-        self.addCleanup(self.clear_cache_safely)
-
-    def clear_cache_safely(self):
-        if rules._ENFORCER:
-            rules._ENFORCER.clear()
-
-
-class PolicyFileTestCase(BasePolicyTestCase):
+class PolicyFileTestCase(unit.TestCase):
     def setUp(self):
         # self.tmpfilename should exist before setUp super is called
         # this is to ensure it is available for the config_fixture in
@@ -50,10 +37,8 @@ class PolicyFileTestCase(BasePolicyTestCase):
         super(PolicyFileTestCase, self).setUp()
         self.target = {}
 
-    def config_overrides(self):
-        super(PolicyFileTestCase, self).config_overrides()
-        self.config_fixture.config(group='oslo_policy',
-                                   policy_file=self.tmpfilename)
+    def _policy_fixture(self):
+        return ksfixtures.Policy(self.tmpfilename, self.config_fixture)
 
     def test_modified_policy_reloads(self):
         action = "example:test"
@@ -77,11 +62,9 @@ class PolicyFileTestCase(BasePolicyTestCase):
                           empty_credentials, action, self.target)
 
 
-class PolicyTestCase(BasePolicyTestCase):
+class PolicyTestCase(unit.TestCase):
     def setUp(self):
         super(PolicyTestCase, self).setUp()
-        # NOTE(vish): preload rules to circumvent reloading from file
-        rules.init()
         self.rules = {
             "true": [],
             "example:allowed": [],
@@ -118,28 +101,6 @@ class PolicyTestCase(BasePolicyTestCase):
         action = "example:allowed"
         rules.enforce(self.credentials, action, self.target)
 
-    def test_enforce_http_true(self):
-
-        def fakeurlopen(url, post_data):
-            return six.StringIO("True")
-
-        action = "example:get_http"
-        target = {}
-        with mock.patch.object(urlrequest, 'urlopen', fakeurlopen):
-            result = rules.enforce(self.credentials, action, target)
-        self.assertTrue(result)
-
-    def test_enforce_http_false(self):
-
-        def fakeurlopen(url, post_data):
-            return six.StringIO("False")
-
-        action = "example:get_http"
-        target = {}
-        with mock.patch.object(urlrequest, 'urlopen', fakeurlopen):
-            self.assertRaises(exception.ForbiddenAction, rules.enforce,
-                              self.credentials, action, target)
-
     def test_templatized_enforcement(self):
         target_mine = {'project_id': 'fake'}
         target_not_mine = {'project_id': 'another'}
@@ -161,17 +122,16 @@ class PolicyTestCase(BasePolicyTestCase):
     def test_ignore_case_role_check(self):
         lowercase_action = "example:lowercase_admin"
         uppercase_action = "example:uppercase_admin"
-        # NOTE(dprince) we mix case in the Admin role here to ensure
+        # NOTE(dprince): We mix case in the Admin role here to ensure
         # case is ignored
         admin_credentials = {'roles': ['AdMiN']}
         rules.enforce(admin_credentials, lowercase_action, self.target)
         rules.enforce(admin_credentials, uppercase_action, self.target)
 
 
-class DefaultPolicyTestCase(BasePolicyTestCase):
+class DefaultPolicyTestCase(unit.TestCase):
     def setUp(self):
         super(DefaultPolicyTestCase, self).setUp()
-        rules.init()
 
         self.rules = {
             "default": [],
@@ -184,7 +144,7 @@ class DefaultPolicyTestCase(BasePolicyTestCase):
         # its enforce() method even though rules has been initialized via
         # set_rules(). To make it easier to do our tests, we're going to
         # monkeypatch load_roles() so it does nothing. This seem like a bug in
-        # Oslo policy as we shoudn't have to reload the rules if they have
+        # Oslo policy as we shouldn't have to reload the rules if they have
         # already been set using set_rules().
         self._old_load_rules = rules._ENFORCER.load_rules
         self.addCleanup(setattr, rules._ENFORCER, 'load_rules',
@@ -214,15 +174,15 @@ class DefaultPolicyTestCase(BasePolicyTestCase):
                           self.credentials, "example:noexist", {})
 
 
-class PolicyJsonTestCase(tests.TestCase):
+class PolicyJsonTestCase(unit.TestCase):
 
     def _load_entries(self, filename):
         return set(json.load(open(filename)))
 
     def test_json_examples_have_matching_entries(self):
-        policy_keys = self._load_entries(tests.dirs.etc('policy.json'))
+        policy_keys = self._load_entries(unit.dirs.etc('policy.json'))
         cloud_policy_keys = self._load_entries(
-            tests.dirs.etc('policy.v3cloudsample.json'))
+            unit.dirs.etc('policy.v3cloudsample.json'))
 
         policy_extra_keys = ['admin_or_token_subject',
                              'service_admin_or_token_subject',
@@ -236,7 +196,7 @@ class PolicyJsonTestCase(tests.TestCase):
         # All the targets in the sample policy file must be documented in
         # doc/source/policy_mapping.rst.
 
-        policy_keys = self._load_entries(tests.dirs.etc('policy.json'))
+        policy_keys = self._load_entries(unit.dirs.etc('policy.json'))
 
         # These keys are in the policy.json but aren't targets.
         policy_rule_keys = [
@@ -249,7 +209,7 @@ class PolicyJsonTestCase(tests.TestCase):
             # targets.
 
             doc_path = os.path.join(
-                tests.ROOTDIR, 'doc', 'source', 'policy_mapping.rst')
+                unit.ROOTDIR, 'doc', 'source', 'policy_mapping.rst')
             with open(doc_path) as doc_file:
                 for line in doc_file:
                     if line.startswith('Target'):

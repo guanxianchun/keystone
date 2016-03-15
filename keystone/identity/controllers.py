@@ -80,10 +80,13 @@ class User(controller.V2Controller):
             self.resource_api.get_project(default_project_id)
             user['default_project_id'] = default_project_id
 
+        self.resource_api.ensure_default_domain_exists()
+
         # The manager layer will generate the unique ID for users
         user_ref = self._normalize_domain_id(context, user.copy())
+        initiator = notifications._get_request_audit_info(context)
         new_user_ref = self.v3_to_v2_user(
-            self.identity_api.create_user(user_ref))
+            self.identity_api.create_user(user_ref, initiator))
 
         if default_project_id is not None:
             self.assignment_api.add_user_to_project(default_project_id,
@@ -120,8 +123,9 @@ class User(controller.V2Controller):
             # user update.
             self.resource_api.get_project(default_project_id)
 
+        initiator = notifications._get_request_audit_info(context)
         user_ref = self.v3_to_v2_user(
-            self.identity_api.update_user(user_id, user))
+            self.identity_api.update_user(user_id, user, initiator))
 
         # If 'tenantId' is in either ref, we might need to add or remove the
         # user from a project.
@@ -147,7 +151,7 @@ class User(controller.V2Controller):
                     try:
                         self.assignment_api.add_user_to_project(
                             user_ref['tenantId'], user_id)
-                    except exception.Conflict:
+                    except exception.Conflict:  # nosec
                         # We are already a member of that tenant
                         pass
                     except exception.NotFound:
@@ -166,7 +170,8 @@ class User(controller.V2Controller):
     @controller.v2_deprecated
     def delete_user(self, context, user_id):
         self.assert_admin(context)
-        self.identity_api.delete_user(user_id)
+        initiator = notifications._get_request_audit_info(context)
+        self.identity_api.delete_user(user_id, initiator)
 
     @controller.v2_deprecated
     def set_user_enabled(self, context, user_id, user):
@@ -250,7 +255,8 @@ class UserV3(controller.V3Controller):
 
     @controller.protected(callback=_check_user_and_group_protection)
     def add_user_to_group(self, context, user_id, group_id):
-        self.identity_api.add_user_to_group(user_id, group_id)
+        initiator = notifications._get_request_audit_info(context)
+        self.identity_api.add_user_to_group(user_id, group_id, initiator)
 
     @controller.protected(callback=_check_user_and_group_protection)
     def check_user_in_group(self, context, user_id, group_id):
@@ -258,7 +264,8 @@ class UserV3(controller.V3Controller):
 
     @controller.protected(callback=_check_user_and_group_protection)
     def remove_user_from_group(self, context, user_id, group_id):
-        self.identity_api.remove_user_from_group(user_id, group_id)
+        initiator = notifications._get_request_audit_info(context)
+        self.identity_api.remove_user_from_group(user_id, group_id, initiator)
 
     @controller.protected()
     def delete_user(self, context, user_id):

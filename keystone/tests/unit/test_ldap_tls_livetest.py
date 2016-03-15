@@ -18,7 +18,7 @@ from oslo_config import cfg
 
 from keystone import exception
 from keystone import identity
-from keystone.tests import unit as tests
+from keystone.tests import unit
 from keystone.tests.unit import test_ldap_livetest
 
 
@@ -40,7 +40,7 @@ class LiveTLSLDAPIdentity(test_ldap_livetest.LiveLDAPIdentity):
 
     def config_files(self):
         config_files = super(LiveTLSLDAPIdentity, self).config_files()
-        config_files.append(tests.dirs.tests_conf('backend_tls_liveldap.conf'))
+        config_files.append(unit.dirs.tests_conf('backend_tls_liveldap.conf'))
         return config_files
 
     def test_tls_certfile_demand_option(self):
@@ -50,6 +50,7 @@ class LiveTLSLDAPIdentity(test_ldap_livetest.LiveLDAPIdentity):
                                    tls_req_cert='demand')
         self.identity_api = identity.backends.ldap.Identity()
 
+        # TODO(shaleh): use new_user_ref()
         user = {'name': 'fake1',
                 'password': 'fakepass1',
                 'tenants': ['bar']}
@@ -71,6 +72,7 @@ class LiveTLSLDAPIdentity(test_ldap_livetest.LiveLDAPIdentity):
                                    tls_req_cert='demand')
         self.identity_api = identity.backends.ldap.Identity()
 
+        # TODO(shaleh): use new_user_ref()
         user = {'id': 'fake1',
                 'name': 'fake1',
                 'password': 'fakepass1',
@@ -95,6 +97,7 @@ class LiveTLSLDAPIdentity(test_ldap_livetest.LiveLDAPIdentity):
             tls_cacertdir=None)
         self.identity_api = identity.backends.ldap.Identity()
 
+        # TODO(shaleh): use new_user_ref()
         user = {'name': 'fake1',
                 'password': 'fakepass1',
                 'tenants': ['bar']}
@@ -109,6 +112,7 @@ class LiveTLSLDAPIdentity(test_ldap_livetest.LiveLDAPIdentity):
             tls_cacertdir='/etc/keystone/ssl/mythicalcertdir')
         self.identity_api = identity.backends.ldap.Identity()
 
+        # TODO(shaleh): use new_user_ref()
         user = {'name': 'fake1',
                 'password': 'fakepass1',
                 'tenants': ['bar']}
